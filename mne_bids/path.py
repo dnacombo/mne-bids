@@ -1122,6 +1122,7 @@ class BIDSPath:
             ignore_json=ignore_json,
             ignore_nosub=ignore_nosub,
             entities=self.entities,
+            ignore_derivatives=True,
         )
 
         fnames = _filter_fnames(
@@ -2659,8 +2660,8 @@ def find_matching_paths(
 
 
 def _return_root_paths(
-    root, datatype=None, ignore_json=True, ignore_nosub=False, entities=None
-):
+    root, datatype=None, ignore_json=True, ignore_nosub=False, entities=None,
+    ignore_derivatives=True):
     """Return all file paths + .ds paths in root with entity-aware optimization.
 
     Can be filtered by datatype (which is present in the path but not in
@@ -2681,6 +2682,9 @@ def _return_root_paths(
     entities : dict | None
         Dictionary of BIDS entities to enable targeted directory scanning.
         If provided with 'subject', will scan only that subject's directory.
+    ignore_derivatives : bool
+        If ``True`` (default), skip the derivatives folder to avoid non-BIDS
+        compliant files that can cause parsing errors.
 
     Returns
     -------
@@ -2735,7 +2739,15 @@ def _return_root_paths(
         # FALLBACK: Original implementation when entities not available
         # or subject unknown
         if datatype is None and not ignore_nosub:
-            paths = root.rglob("*.*")
+            if ignore_derivatives:
+                # Exclude derivatives folder to avoid non-BIDS compliant files
+                paths = []
+                for path in root.rglob("*.*"):
+                    # Skip anything in derivatives folder
+                    if 'derivatives' not in path.parts:
+                        paths.append(path)
+            else:
+                paths = root.rglob("*.*")
         else:
             if datatype is not None:
                 datatype = _ensure_tuple(datatype)
@@ -2756,10 +2768,21 @@ def _return_root_paths(
                     )
             else:
                 search_str = "**/*.*"
-                if ignore_nosub:
-                    search_str = f"sub-*/{search_str}"
-                # TODO: Why is this not equivalent to list(root.rglob(search_str)) ?
-                # Most of the speedup is from using glob.iglob here.
+
+            # only browse files which are of the form root/sub-*,
+            # such that we truely only look in 'sub'-folders:
+            if ignore_nosub:
+                search_str = f"sub-*/{search_str}"
+            # TODO: Why is this not equivalent to list(root.rglob(search_str)) ?
+            # Most of the speedup is from using glob.iglob here.
+            if ignore_derivatives:
+                paths = [
+                    Path(root, fn)
+                    for fn in glob.iglob(search_str, root_dir=root, recursive=True)
+                    # Skip derivatives folder
+                    if 'derivatives' not in fn
+                ]
+            else:
                 paths = [
                     Path(root, fn)
                     for fn in glob.iglob(search_str, root_dir=root, recursive=True)
